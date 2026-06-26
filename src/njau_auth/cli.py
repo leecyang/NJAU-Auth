@@ -57,7 +57,7 @@ async def _run(args: argparse.Namespace) -> None:
         result = await manager.login(force_refresh=args.force_refresh)
         print(f"final_url={result.final_url}")
         print(f"token={result.token or ''}")
-        print("cookies=" + "; ".join(f"{key}={value}" for key, value in result.cookies.items()))
+        print("cookies=" + "; ".join(f"{cookie['name']}={cookie['value']}" for cookie in result.cookies))
 
 
 def main() -> None:

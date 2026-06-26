@@ -32,7 +32,7 @@ class CaptchaChallenge:
 class LoginResult:
     final_url: str
     token: str | None
-    cookies: dict[str, str]
+    cookies: list[dict[str, str]]
     storage_state: dict[str, Any]
     html: str = ""
 

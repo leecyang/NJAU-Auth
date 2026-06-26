@@ -1,6 +1,6 @@
 [project]
 name = "njau-auth"
-version = "0.1.1"
+version = "0.1.2"
 description = "NJAU CAS authentication helper"
 readme = "README.md"
 authors = [{ name = "leecyang" }]

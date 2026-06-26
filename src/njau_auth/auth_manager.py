@@ -12,12 +12,14 @@ from .auth_client import (
 )
 from .models import LoginResult
 
+CookieStore = dict[str, str] | list[dict[str, str]]
+
 
 class AuthStorage(Protocol):
-    async def load_cookies(self, student_id: str) -> dict[str, str] | None:
+    async def load_cookies(self, student_id: str) -> CookieStore | None:
         ...
 
-    async def save_cookies(self, student_id: str, cookies: dict[str, str]) -> None:
+    async def save_cookies(self, student_id: str, cookies: list[dict[str, str]]) -> None:
         ...
 
     async def clear_cookies(self, student_id: str) -> None:
@@ -45,11 +47,11 @@ class JsonFileAuthStorage:
             encoding="utf-8",
         )
 
-    async def load_cookies(self, student_id: str) -> dict[str, str] | None:
+    async def load_cookies(self, student_id: str) -> CookieStore | None:
         value = self._data.get("cookies", {}).get(student_id)
-        return value if isinstance(value, dict) else None
+        return value if isinstance(value, (dict, list)) else None
 
-    async def save_cookies(self, student_id: str, cookies: dict[str, str]) -> None:
+    async def save_cookies(self, student_id: str, cookies: list[dict[str, str]]) -> None:
         self._data.setdefault("cookies", {})[student_id] = cookies
         self._save()
 

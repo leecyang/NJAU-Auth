@@ -132,6 +132,91 @@ def test_cli_accepts_captcha_options():
     assert args.captcha_code == "abcd"
 
 
+def test_get_cookies_preserves_duplicate_names():
+    async def scenario():
+        client = NJAUAuthClient()
+        async with client:
+            client.client.cookies.set("JSESSIONID", "one", domain="authserver.njau.edu.cn", path="/authserver")
+            client.client.cookies.set("JSESSIONID", "two", domain="jw3.njau.edu.cn", path="/")
+            return client.get_cookies()
+
+    cookies = run(scenario())
+    jsessionids = [cookie for cookie in cookies if cookie["name"] == "JSESSIONID"]
+    assert len(jsessionids) == 2
+    assert {cookie["value"] for cookie in jsessionids} == {"one", "two"}
+    assert {cookie["domain"] for cookie in jsessionids} == {"authserver.njau.edu.cn", "jw3.njau.edu.cn"}
+
+
+def test_load_cookies_accepts_legacy_dict_format():
+    async def scenario():
+        client = NJAUAuthClient()
+        async with client:
+            client.load_cookies({"SESSION": "legacy"})
+            return client.get_cookies()
+
+    cookies = run(scenario())
+    assert any(cookie["name"] == "SESSION" and cookie["value"] == "legacy" for cookie in cookies)
+
+
+def test_reauth_sms_success_prompts_once():
+    sms_page = """
+    <html><body>
+    <script>
+    var reAuthParams = {
+      "reAuthType": "3",
+      "reAuthUserId": "2023000000",
+      "service": "http://jw3.njau.edu.cn/",
+      "isMultifactor": "true"
+    };
+    </script>
+    </body></html>
+    """
+    callbacks = 0
+
+    async def handler(request):
+        path = request.url.path
+        if path.endswith("/dynamicCode/getDynamicCodeByReauth.do"):
+            return response(
+                request,
+                text='{"res":"success","message":"sent"}',
+                headers={"content-type": "application/json"},
+            )
+        if path.endswith("/reAuthCheck/reAuthSubmit.do"):
+            return response(
+                request,
+                text='{"code":"ok"}',
+                headers={"content-type": "application/json"},
+            )
+        if path.endswith("/authserver/login") and request.method == "GET":
+            return httpx.Response(
+                302,
+                headers={"location": "http://jw3.njau.edu.cn/"},
+                request=request,
+            )
+        if str(request.url) == "http://jw3.njau.edu.cn/":
+            return response(request, text="ok")
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    async def sms_callback(challenge):
+        nonlocal callbacks
+        callbacks += 1
+        return "123456"
+
+    async def scenario():
+        client = NJAUAuthClient(transport=httpx.MockTransport(handler))
+        async with client:
+            request = httpx.Request(
+                "GET",
+                "https://authserver.njau.edu.cn/authserver/reAuthCheck/reAuthLoginView.do",
+            )
+            initial = httpx.Response(200, text=sms_page, request=request)
+            return await client._complete_sms(initial, sms_callback)
+
+    result = run(scenario())
+    assert str(result.url) == "http://jw3.njau.edu.cn/"
+    assert callbacks == 1
+
+
 def test_reauth_sms_send_candidate_uses_reauth_endpoint():
     html = """
     <script>

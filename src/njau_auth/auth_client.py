@@ -102,11 +102,32 @@ class NJAUAuthClient:
             await self._client.aclose()
             self._client = None
 
-    def get_cookies(self) -> dict[str, str]:
-        return dict(self.client.cookies)
+    def get_cookies(self) -> list[dict[str, str]]:
+        return [
+            {
+                "name": cookie.name,
+                "value": cookie.value,
+                "domain": cookie.domain or "",
+                "path": cookie.path or "/",
+            }
+            for cookie in self.client.cookies.jar
+        ]
 
-    def load_cookies(self, cookies: dict[str, str]) -> None:
-        self.client.cookies.update(cookies)
+    def load_cookies(self, cookies: dict[str, str] | list[dict[str, str]]) -> None:
+        if isinstance(cookies, dict):
+            self.client.cookies.update(cookies)
+            return
+        for cookie in cookies:
+            name = cookie.get("name", "")
+            if not name:
+                continue
+            value = cookie.get("value", "")
+            domain = cookie.get("domain") or None
+            path = cookie.get("path") or "/"
+            if domain:
+                self.client.cookies.set(name, value, domain=domain, path=path)
+            else:
+                self.client.cookies.set(name, value, path=path)
 
     async def resume(self) -> LoginResult | None:
         await self.open()
@@ -280,8 +301,9 @@ class NJAUAuthClient:
             )
             reauth_payload = self._json_or_text(response)
             if isinstance(reauth_payload, dict):
-                if str(reauth_payload.get("code", "")).startswith("reAuth_"):
-                    message = str(reauth_payload.get("msg") or "SMS verification failed")
+                reauth_code = str(reauth_payload.get("code", ""))
+                if reauth_code in {"reAuth_failed", "reAuth_unauthorized"}:
+                    message = str(reauth_payload.get("msg") or reauth_code or "SMS verification failed")
                     if attempt == 3:
                         raise NJAUAuthError("CAS_SMS_FAILED", message)
                     continue

@@ -1,8 +1,8 @@
 # NJAU-Auth
 
-南京农业大学统一身份认证（CAS）登录辅助库。项目形态参考 `Golevka2001/SEU-Auth`，当前版本使用纯 HTTP 请求完成登录，不依赖 Playwright 或浏览器自动化。
+南京农业大学统一身份认证（CAS）登录辅助库，使用纯 HTTP 请求完成登录，不依赖 Playwright 或浏览器自动化。
 
-当前实现参考了本地 `NJAU-Libyy` 项目中可工作的 CAS 自动化流程，支持：
+当前支持：
 
 - 使用学号和统一认证密码登录。
 - 先 GET 登录页，提取 `execution` 和 `pwdEncryptSalt`。
@@ -16,7 +16,7 @@
 ## Installation
 
 ```bash
-pip install -e .
+pip install njau-auth
 ```
 
 ## Basic Usage

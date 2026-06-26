@@ -21,6 +21,14 @@ class SMSChallenge:
 
 
 @dataclass(slots=True)
+class CaptchaChallenge:
+    image: bytes
+    content_type: str
+    attempt: int
+    message: str
+
+
+@dataclass(slots=True)
 class LoginResult:
     final_url: str
     token: str | None

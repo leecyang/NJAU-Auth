@@ -7,11 +7,12 @@ from .exceptions import (
     NJAUAuthError,
     SMSRequiredError,
 )
-from .models import LoginResult, PageState, SMSChallenge
+from .models import CaptchaChallenge, LoginResult, PageState, SMSChallenge
 
 __all__ = [
     "AuthStorage",
     "CaptchaRequiredError",
+    "CaptchaChallenge",
     "CASFormError",
     "InvalidCredentialsError",
     "JsonFileAuthStorage",

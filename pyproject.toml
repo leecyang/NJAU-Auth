@@ -1,13 +1,13 @@
 [project]
 name = "njau-auth"
-version = "0.1.0"
+version = "0.1.1"
 description = "NJAU CAS authentication helper"
 readme = "README.md"
 authors = [{ name = "leecyang" }]
 license = { text = "MIT" }
 keywords = ["njau", "cas", "auth", "httpx"]
 requires-python = ">=3.10"
-dependencies = ["httpx>=0.28.1", "pycryptodome>=3.20.0"]
+dependencies = ["ddddocr>=1.6.1", "httpx>=0.28.1", "pycryptodome>=3.20.0"]
 
 [project.scripts]
 njau-auth-login = "njau_auth.cli:main"

@@ -7,6 +7,7 @@ from .auth_client import (
     DEFAULT_SUCCESS_URL_CONTAINS,
     DEFAULT_TOKEN_STORAGE_KEY,
     NJAUAuthClient,
+    CaptchaCallback,
     SMSCallback,
 )
 from .models import LoginResult
@@ -64,6 +65,7 @@ class NJAUAuthManager:
         password: str,
         *,
         sms_callback: SMSCallback | None = None,
+        captcha_callback: CaptchaCallback | None = None,
         storage: AuthStorage | None = None,
         service_url: str = DEFAULT_SERVICE_URL,
         success_url_contains: str = DEFAULT_SUCCESS_URL_CONTAINS,
@@ -74,6 +76,7 @@ class NJAUAuthManager:
         self.student_id = student_id
         self.password = password
         self.sms_callback = sms_callback
+        self.captcha_callback = captcha_callback
         self.storage = storage or JsonFileAuthStorage()
         self.service_url = service_url
         self.success_url_contains = success_url_contains
@@ -130,6 +133,7 @@ class NJAUAuthManager:
             self.student_id,
             self.password,
             sms_callback=self.sms_callback,
+            captcha_callback=self.captcha_callback,
             clear_existing_state=force_refresh,
         )
         await self.storage.save_cookies(self.student_id, result.cookies)

@@ -6,14 +6,18 @@ from urllib.parse import urlencode, urlparse, urlunparse
 import httpx
 
 from .exceptions import CaptchaRequiredError, InvalidCredentialsError, NJAUAuthError
-from .models import LoginResult, SMSChallenge
+from .models import CaptchaChallenge, LoginResult, SMSChallenge
 from .utils.crypto import DEFAULT_AES_IV, encrypt_password
 from .utils.parse import (
     extract_error_text,
     extract_login_page,
+    extract_reauth_params,
+    has_captcha_error,
     has_captcha_challenge,
     has_sms_challenge,
+    has_slider_challenge,
     is_student_id,
+    parse_need_captcha_response,
 )
 
 DEFAULT_BASE_URL = "https://authserver.njau.edu.cn"
@@ -26,11 +30,19 @@ DEFAULT_USER_AGENT = (
 )
 
 SMSCallback = Callable[[SMSChallenge], str | Awaitable[str]]
+CaptchaCallback = Callable[[CaptchaChallenge], str | Awaitable[str]]
 
 
 async def _default_sms_callback(challenge: SMSChallenge) -> str:
     print(challenge.message)
     return input("Please enter SMS code: ").strip()
+
+
+async def _default_captcha_callback(challenge: CaptchaChallenge) -> str:
+    import ddddocr
+
+    ocr = ddddocr.DdddOcr(show_ad=False)
+    return str(ocr.classification(challenge.image)).strip()
 
 
 class NJAUAuthClient:
@@ -46,6 +58,7 @@ class NJAUAuthClient:
         timeout: float = 30.0,
         headers: dict[str, str] | None = None,
         aes_iv: str = DEFAULT_AES_IV,
+        transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.service_url = service_url
@@ -53,6 +66,7 @@ class NJAUAuthClient:
         self.token_storage_key = token_storage_key
         self.timeout = timeout
         self.aes_iv = aes_iv
+        self.transport = transport
         self._headers = {
             "User-Agent": DEFAULT_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -80,6 +94,7 @@ class NJAUAuthClient:
             headers=self._headers,
             follow_redirects=True,
             timeout=self.timeout,
+            transport=self.transport,
         )
 
     async def close(self) -> None:
@@ -106,7 +121,9 @@ class NJAUAuthClient:
         password: str,
         *,
         sms_callback: SMSCallback | None = None,
+        captcha_callback: CaptchaCallback | None = None,
         captcha: str = "",
+        max_captcha_attempts: int = 3,
         clear_existing_state: bool = True,
     ) -> LoginResult:
         if not is_student_id(student_id):
@@ -118,37 +135,90 @@ class NJAUAuthClient:
         if clear_existing_state:
             self.client.cookies.clear()
 
-        login_response = await self.client.get(self.login_url)
-        login_response.raise_for_status()
-        page = extract_login_page(
-            login_response.text,
-            str(login_response.url),
-            base_url=self.base_url,
-        )
-        encrypted = encrypt_password(password, page.pwd_encrypt_salt, iv=self.aes_iv)
+        if max_captcha_attempts < 1:
+            raise ValueError("max_captcha_attempts must be at least 1")
 
-        data = {
-            "username": student_id,
-            "password": encrypted,
-            "captcha": captcha,
-            "_eventId": page.fields.get("_eventId", "submit"),
-            "cllt": "userNameLogin",
-            "dllt": page.fields.get("dllt", "generalLogin"),
-            "lt": page.fields.get("lt", ""),
-            "execution": page.execution,
-        }
-        response = await self.client.post(
-            self._with_service(page.action),
-            data=data,
+        captcha_callback = captcha_callback or _default_captcha_callback
+        last_error = ""
+        for attempt in range(1, max_captcha_attempts + 1):
+            login_response = await self.client.get(self.login_url)
+            login_response.raise_for_status()
+            if has_slider_challenge(login_response.text):
+                raise CaptchaRequiredError("CAS requires slider captcha")
+            page = extract_login_page(
+                login_response.text,
+                str(login_response.url),
+                base_url=self.base_url,
+            )
+            encrypted = encrypt_password(password, page.pwd_encrypt_salt, iv=self.aes_iv)
+            captcha_code = captcha if attempt == 1 and captcha else ""
+            if not captcha_code and await self._need_captcha(student_id):
+                challenge = await self._fetch_captcha(attempt)
+                captcha_code = await self._call_captcha_callback(captcha_callback, challenge)
+            if captcha_code:
+                captcha_code = captcha_code.strip()
+
+            data = {
+                "username": student_id,
+                "password": encrypted,
+                "captcha": captcha_code,
+                "_eventId": page.fields.get("_eventId", "submit"),
+                "cllt": "userNameLogin",
+                "dllt": page.fields.get("dllt", "generalLogin"),
+                "lt": page.fields.get("lt", ""),
+                "execution": page.execution,
+            }
+            response = await self.client.post(
+                self._with_service(page.action),
+                data=data,
+                headers={
+                    "Origin": self.base_url,
+                    "Referer": str(login_response.url),
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+            if self._is_success(response):
+                return self._result(response)
+            if has_slider_challenge(response.text):
+                raise CaptchaRequiredError("CAS requires slider captcha")
+
+            error_text = extract_error_text(response.text)
+            if has_captcha_error(error_text) and attempt < max_captcha_attempts:
+                last_error = error_text
+                continue
+            return await self._handle_login_response(
+                response,
+                sms_callback=sms_callback or _default_sms_callback,
+            )
+
+        raise CaptchaRequiredError(last_error or "CAS captcha verification failed")
+
+    async def _need_captcha(self, student_id: str) -> bool:
+        response = await self.client.get(
+            f"{self.base_url}/authserver/checkNeedCaptcha.htl",
+            params={"username": student_id},
             headers={
-                "Origin": self.base_url,
-                "Referer": str(login_response.url),
-                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": self.login_url,
+                "X-Requested-With": "XMLHttpRequest",
             },
         )
-        return await self._handle_login_response(
-            response,
-            sms_callback=sms_callback or _default_sms_callback,
+        response.raise_for_status()
+        return parse_need_captcha_response(self._json_or_text(response))
+
+    async def _fetch_captcha(self, attempt: int) -> CaptchaChallenge:
+        response = await self.client.get(
+            f"{self.base_url}/authserver/getCaptcha.htl",
+            headers={"Referer": self.login_url},
+        )
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        if not response.content or "image" not in content_type.lower():
+            raise CaptchaRequiredError("CAS captcha image endpoint did not return an image")
+        return CaptchaChallenge(
+            image=response.content,
+            content_type=content_type,
+            attempt=attempt,
+            message="Recognize the NJAU CAS captcha image",
         )
 
     async def _handle_login_response(
@@ -161,6 +231,8 @@ class NJAUAuthClient:
             return self._result(response)
 
         error_text = extract_error_text(response.text)
+        if has_slider_challenge(response.text):
+            raise CaptchaRequiredError("CAS requires slider captcha")
         if has_captcha_challenge(response.text, error_text):
             raise CaptchaRequiredError(error_text or "CAS requires captcha verification")
         if self._is_invalid_credentials(error_text):
@@ -196,15 +268,30 @@ class NJAUAuthClient:
             data = self._sms_form_data(response.text)
             data["dynamicCode"] = code
             submit_url = self._sms_submit_url(response)
+            submit_data = {key: value for key, value in data.items() if not key.startswith("__")}
             response = await self.client.post(
                 submit_url,
-                data=data,
+                data=submit_data,
                 headers={
                     "Origin": self.base_url,
                     "Referer": str(response.url),
                     "Content-Type": "application/x-www-form-urlencoded",
                 },
             )
+            reauth_payload = self._json_or_text(response)
+            if isinstance(reauth_payload, dict):
+                if str(reauth_payload.get("code", "")).startswith("reAuth_"):
+                    message = str(reauth_payload.get("msg") or "SMS verification failed")
+                    if attempt == 3:
+                        raise NJAUAuthError("CAS_SMS_FAILED", message)
+                    continue
+                params = extract_reauth_params(data.get("__html", ""))
+                service = params.get("service") if params else self.service_url
+                response = await self.client.get(
+                    f"{self.base_url}/authserver/login",
+                    params={"service": service or self.service_url},
+                    headers={"Referer": str(response.url)},
+                )
             if self._is_success(response):
                 return response
             error_text = extract_error_text(response.text)
@@ -232,9 +319,10 @@ class NJAUAuthClient:
                 if isinstance(payload, dict):
                     message = str(payload.get("message") or payload.get("msg") or payload.get("info") or "")
                     code = str(payload.get("code") or "")
-                    if code.lower() in {"success", "ok", "200"} or payload.get("success") is True:
+                    result = str(payload.get("res") or "")
+                    if code.lower() in {"success", "ok", "200"} or result.endswith("success") or payload.get("success") is True:
                         return message
-                    last_error = message or code
+                    last_error = message or code or result
                 elif "success" in payload.lower() or "已发送" in payload:
                     return payload
             except httpx.HTTPError as exc:
@@ -246,6 +334,18 @@ class NJAUAuthClient:
     def _sms_send_candidates(self, response: httpx.Response) -> list[tuple[str, dict[str, str]]]:
         html = response.text
         candidates: list[tuple[str, dict[str, str]]] = []
+        reauth_params = extract_reauth_params(html)
+        if reauth_params:
+            auth_code_type = self._reauth_code_type(str(reauth_params.get("reAuthType", "")))
+            candidates.append(
+                (
+                    f"{self.base_url}/authserver/dynamicCode/getDynamicCodeByReauth.do",
+                    {
+                        "userName": str(reauth_params.get("reAuthUserId", "")),
+                        "authCodeTypeName": auth_code_type,
+                    },
+                )
+            )
         for match in set(
             re_match
             for re_match in re.findall(r'["\']([^"\']*dynamicCode[^"\']*?\.htl)["\']', html)
@@ -263,6 +363,21 @@ class NJAUAuthClient:
     def _sms_form_data(self, html: str) -> dict[str, str]:
         from .utils.parse import parse_forms
 
+        reauth_params = extract_reauth_params(html)
+        if reauth_params:
+            return {
+                "__html": html,
+                "service": str(reauth_params.get("service", "")),
+                "reAuthType": str(reauth_params.get("reAuthType", "")),
+                "isMultifactor": str(reauth_params.get("isMultifactor", "")),
+                "password": "",
+                "dynamicCode": "",
+                "uuid": "",
+                "answer1": "",
+                "answer2": "",
+                "otpCode": "",
+            }
+
         forms = parse_forms(html)
         form = forms.get("pwdFromId") or forms.get("phoneFromId") or next(iter(forms.values()), None)
         fields = dict(form["inputs"]) if form else {}
@@ -274,6 +389,9 @@ class NJAUAuthClient:
 
     def _sms_submit_url(self, response: httpx.Response) -> str:
         from .utils.parse import parse_forms
+
+        if extract_reauth_params(response.text):
+            return f"{self.base_url}/authserver/reAuthCheck/reAuthSubmit.do"
 
         forms = parse_forms(response.text)
         form = forms.get("pwdFromId") or forms.get("phoneFromId") or next(iter(forms.values()), None)
@@ -318,7 +436,25 @@ class NJAUAuthClient:
         return any(word in error_text for word in ["用户名", "密码错误", "账号", "凭证错误"])
 
     @staticmethod
+    def _reauth_code_type(reauth_type: str) -> str:
+        return {
+            "3": "reAuthDynamicCodeType",
+            "4": "reAuthWChatDynamicCodeType",
+            "5": "reAuthCpdailyDynamicCodeType",
+            "11": "reAuthEmailDynamicCodeType",
+            "12": "reAuthDingTalkDynamicCodeType",
+            "13": "reAuthWeLinkDynamicCodeType",
+        }.get(reauth_type, "reAuthDynamicCodeType")
+
+    @staticmethod
     async def _call_sms_callback(callback: SMSCallback, challenge: SMSChallenge) -> str:
+        value = callback(challenge)
+        if inspect.isawaitable(value):
+            value = await value
+        return str(value).strip()
+
+    @staticmethod
+    async def _call_captcha_callback(callback: CaptchaCallback, challenge: CaptchaChallenge) -> str:
         value = callback(challenge)
         if inspect.isawaitable(value):
             value = await value

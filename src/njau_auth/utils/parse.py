@@ -1,4 +1,5 @@
 import re
+import json
 from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urljoin
@@ -118,9 +119,34 @@ def has_sms_challenge(html: str, url: str) -> bool:
 
 
 def has_captcha_challenge(html: str, error_text: str = "") -> bool:
-    if "sliderCaptchaDiv" in html:
+    if has_slider_challenge(html):
+        return True
+    if has_captcha_error(error_text):
         return True
     if "captchaDiv" in html and "getCaptcha.htl" in html:
         return True
-    return any(word in error_text for word in ["验证码", "图形动态码", "滑块"])
+    return False
 
+
+def has_slider_challenge(html: str) -> bool:
+    return "toSliderCaptcha.htl" in html or "slider-captcha" in html
+
+
+def has_captcha_error(error_text: str) -> bool:
+    return any(word in error_text for word in ["验证码", "图形动态码"])
+
+
+def parse_need_captcha_response(payload: object) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    return bool(payload.get("isNeed"))
+
+
+def extract_reauth_params(html: str) -> dict[str, Any]:
+    match = re.search(r"var\s+reAuthParams\s*=\s*(\{.*?\})\s*(?:;|\s*</script>)", html, re.S | re.I)
+    if not match:
+        return {}
+    try:
+        return json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return {}

@@ -1,8 +1,10 @@
 import argparse
 import asyncio
 import getpass
+from pathlib import Path
 
 from .auth_manager import NJAUAuthManager
+from .auth_client import _default_captcha_callback
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -11,6 +13,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--password")
     parser.add_argument("--force-refresh", action="store_true")
     parser.add_argument("--service-url")
+    parser.add_argument("--captcha-image-dir")
+    parser.add_argument("--captcha-code")
     return parser
 
 
@@ -21,6 +25,24 @@ async def _run(args: argparse.Namespace) -> None:
         print(challenge.message)
         return input("SMS code: ").strip()
 
+    used_manual_captcha = False
+
+    async def captcha_callback(challenge):
+        nonlocal used_manual_captcha
+        if args.captcha_image_dir:
+            target_dir = Path(args.captcha_image_dir)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            suffix = ".jpg" if "jpeg" in challenge.content_type.lower() else ".png"
+            target = target_dir / f"captcha-{challenge.attempt}{suffix}"
+            target.write_bytes(challenge.image)
+            print(f"captcha_image={target}")
+        if args.captcha_code and not used_manual_captcha:
+            used_manual_captcha = True
+            return args.captcha_code.strip()
+        code = await _default_captcha_callback(challenge)
+        print(f"captcha_ocr={code}")
+        return code
+
     options = {}
     if args.service_url:
         options["service_url"] = args.service_url
@@ -29,6 +51,7 @@ async def _run(args: argparse.Namespace) -> None:
         student_id=args.student_id,
         password=password,
         sms_callback=sms_callback,
+        captcha_callback=captcha_callback,
         **options,
     ) as manager:
         result = await manager.login(force_refresh=args.force_refresh)

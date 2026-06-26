@@ -7,6 +7,7 @@ from njau_auth.utils import (
     normalize_cas_error,
 )
 from njau_auth.utils.parse import extract_login_page
+from njau_auth.utils.parse import parse_need_captcha_response
 
 
 def test_is_student_id_accepts_letters_and_digits():
@@ -103,3 +104,9 @@ def test_fixed_key_compatibility_helper_uses_salt_plus_password():
         iv="HDbk7NdBpFPpFrZR",
     )
     assert encrypted == "CrlQs5cBatFsWRtEppXJjg=="
+
+
+def test_parse_need_captcha_response():
+    assert parse_need_captcha_response({"isNeed": True}) is True
+    assert parse_need_captcha_response({"isNeed": False}) is False
+    assert parse_need_captcha_response({}) is False

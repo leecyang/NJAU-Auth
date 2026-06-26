@@ -21,3 +21,7 @@ class SMSRequiredError(NJAUAuthError):
     def __init__(self, message: str = "CAS requires SMS verification"):
         super().__init__("CAS_SMS_REQUIRED", message)
 
+
+class CASFormError(NJAUAuthError):
+    def __init__(self, message: str = "CAS login form is incomplete"):
+        super().__init__("CAS_FORM_ERROR", message)

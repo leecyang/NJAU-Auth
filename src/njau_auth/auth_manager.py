@@ -13,13 +13,13 @@ from .models import LoginResult
 
 
 class AuthStorage(Protocol):
-    async def load_state(self, student_id: str) -> dict[str, Any] | None:
+    async def load_cookies(self, student_id: str) -> dict[str, str] | None:
         ...
 
-    async def save_state(self, student_id: str, state: dict[str, Any]) -> None:
+    async def save_cookies(self, student_id: str, cookies: dict[str, str]) -> None:
         ...
 
-    async def clear_state(self, student_id: str) -> None:
+    async def clear_cookies(self, student_id: str) -> None:
         ...
 
 
@@ -44,16 +44,16 @@ class JsonFileAuthStorage:
             encoding="utf-8",
         )
 
-    async def load_state(self, student_id: str) -> dict[str, Any] | None:
-        value = self._data.get("storage_state", {}).get(student_id)
+    async def load_cookies(self, student_id: str) -> dict[str, str] | None:
+        value = self._data.get("cookies", {}).get(student_id)
         return value if isinstance(value, dict) else None
 
-    async def save_state(self, student_id: str, state: dict[str, Any]) -> None:
-        self._data.setdefault("storage_state", {})[student_id] = state
+    async def save_cookies(self, student_id: str, cookies: dict[str, str]) -> None:
+        self._data.setdefault("cookies", {})[student_id] = cookies
         self._save()
 
-    async def clear_state(self, student_id: str) -> None:
-        self._data.get("storage_state", {}).pop(student_id, None)
+    async def clear_cookies(self, student_id: str) -> None:
+        self._data.get("cookies", {}).pop(student_id, None)
         self._save()
 
 
@@ -68,10 +68,8 @@ class NJAUAuthManager:
         service_url: str = DEFAULT_SERVICE_URL,
         success_url_contains: str = DEFAULT_SUCCESS_URL_CONTAINS,
         token_storage_key: str | None = DEFAULT_TOKEN_STORAGE_KEY,
-        headless: bool = True,
-        timeout_ms: int = 180_000,
-        user_data_dir: str | Path | None = None,
-        browser_launch_options: dict[str, Any] | None = None,
+        timeout: float = 30.0,
+        headers: dict[str, str] | None = None,
     ):
         self.student_id = student_id
         self.password = password
@@ -80,10 +78,8 @@ class NJAUAuthManager:
         self.service_url = service_url
         self.success_url_contains = success_url_contains
         self.token_storage_key = token_storage_key
-        self.headless = headless
-        self.timeout_ms = timeout_ms
-        self.user_data_dir = user_data_dir
-        self.browser_launch_options = browser_launch_options or {}
+        self.timeout = timeout
+        self.headers = headers or {}
         self._client: NJAUAuthClient | None = None
 
     async def __aenter__(self) -> "NJAUAuthManager":
@@ -98,39 +94,36 @@ class NJAUAuthManager:
             self._client = None
 
     async def login(self, *, force_refresh: bool = False) -> LoginResult:
-        storage_state = None
-        if not force_refresh and self.user_data_dir is None:
-            storage_state = await self.storage.load_state(self.student_id)
+        cookies = None
+        if not force_refresh:
+            cookies = await self.storage.load_cookies(self.student_id)
 
         self._client = NJAUAuthClient(
             service_url=self.service_url,
             success_url_contains=self.success_url_contains,
             token_storage_key=self.token_storage_key,
-            headless=self.headless,
-            timeout_ms=self.timeout_ms,
-            user_data_dir=self.user_data_dir,
-            storage_state=storage_state,
-            browser_launch_options=self.browser_launch_options,
+            timeout=self.timeout,
+            headers=self.headers,
         )
+        await self._client.open()
+        if cookies:
+            self._client.load_cookies(cookies)
 
-        if not force_refresh and storage_state is not None:
+        if not force_refresh and cookies is not None:
             resumed = await self._client.resume()
             if resumed is not None:
                 return resumed
             await self._client.close()
             self._client = None
-            storage_state = None
+            cookies = None
 
         if self._client is None:
             self._client = NJAUAuthClient(
                 service_url=self.service_url,
                 success_url_contains=self.success_url_contains,
                 token_storage_key=self.token_storage_key,
-                headless=self.headless,
-                timeout_ms=self.timeout_ms,
-                user_data_dir=self.user_data_dir,
-                storage_state=storage_state,
-                browser_launch_options=self.browser_launch_options,
+                timeout=self.timeout,
+                headers=self.headers,
             )
 
         result = await self._client.login(
@@ -139,6 +132,5 @@ class NJAUAuthManager:
             sms_callback=self.sms_callback,
             clear_existing_state=force_refresh,
         )
-        if self.user_data_dir is None:
-            await self.storage.save_state(self.student_id, result.storage_state)
+        await self.storage.save_cookies(self.student_id, result.cookies)
         return result

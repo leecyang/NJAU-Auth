@@ -9,7 +9,6 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Login to NJAU CAS")
     parser.add_argument("--student-id", required=True)
     parser.add_argument("--password")
-    parser.add_argument("--headed", action="store_true", help="Show Chromium window")
     parser.add_argument("--force-refresh", action="store_true")
     parser.add_argument("--service-url")
     return parser
@@ -30,12 +29,12 @@ async def _run(args: argparse.Namespace) -> None:
         student_id=args.student_id,
         password=password,
         sms_callback=sms_callback,
-        headless=not args.headed,
         **options,
     ) as manager:
         result = await manager.login(force_refresh=args.force_refresh)
         print(f"final_url={result.final_url}")
         print(f"token={result.token or ''}")
+        print("cookies=" + "; ".join(f"{key}={value}" for key, value in result.cookies.items()))
 
 
 def main() -> None:
@@ -45,4 +44,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

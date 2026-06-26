@@ -5,9 +5,9 @@ description = "NJAU CAS authentication helper"
 readme = "README.md"
 authors = [{ name = "leecyang" }]
 license = { text = "MIT" }
-keywords = ["njau", "cas", "auth", "playwright"]
+keywords = ["njau", "cas", "auth", "httpx"]
 requires-python = ">=3.10"
-dependencies = ["playwright>=1.52.0"]
+dependencies = ["httpx>=0.28.1", "pycryptodome>=3.20.0"]
 
 [project.scripts]
 njau-auth-login = "njau_auth.cli:main"
